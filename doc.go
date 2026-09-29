@@ -7,7 +7,7 @@
 //
 //	src, err := servercert.New(servercert.Config{
 //	    ACME: &servercert.ACME{
-//	        DirectoryURL:   "https://acme.harica.gr/<alias>/directory",
+//	        DirectoryURL:   "https://acme-v02.harica.gr/acme/<uuid>/directory", // as cm.harica.gr shows it
 //	        Domains:        []string{"files.example.org"},
 //	        CacheDir:       "/var/lib/fileshare/acme",
 //	        EABKeyID:       "<key ID from cm.harica.gr>",
@@ -48,8 +48,12 @@
 // served by HARICA since 2025-01-10 (it replaced Sectigo): an Enterprise
 // account with pre-validated domains gets its certificates with no ACME
 // challenge (DFN: https://doku.tid.dfn.de/de:dfnpki:tcs:2025:acme). The
-// directory is https://acme.harica.gr/<alias>/directory and the EAB key ID
-// and HMAC key come from https://cm.harica.gr. So an INTERNAL server
+// directory URL, the EAB key ID and the HMAC key are all shown by
+// https://cm.harica.gr for the ACME account -- of the form
+// https://acme-v02.harica.gr/acme/<uuid>/directory in SURF's instructions
+// (https://servicedesk.surf.nl/wiki/spaces/WIKI/pages/147098524/ACME, June
+// 2025); older guides show another form, so copy it rather than build it. So
+// an INTERNAL server
 // reachable on neither port 80 nor 443 from the Internet can still get a
 // publicly trusted certificate.
 //
