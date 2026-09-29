@@ -44,7 +44,8 @@ type Config struct {
 type ACME struct {
 	// DirectoryURL is the CA's ACME directory, https only (RFC 8555 §6.1).
 	// Empty means Let's Encrypt production, [acme.LetsEncryptURL].
-	// For GÉANT TCS it is https://acme.harica.gr/<alias>/directory.
+	// For GÉANT TCS it is the Server URL cm.harica.gr shows for the ACME
+	// account, such as https://acme-v02.harica.gr/acme/<uuid>/directory.
 	DirectoryURL string
 
 	// Email is the account's contact address; optional.

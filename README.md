@@ -70,7 +70,7 @@ server inside a lab network — still gets a publicly trusted certificate:
 ```go
 src, err := servercert.New(servercert.Config{
     ACME: &servercert.ACME{
-        DirectoryURL:   "https://acme.harica.gr/<alias>/directory",
+        DirectoryURL:   "https://acme-v02.harica.gr/acme/<uuid>/directory", // the Server URL cm.harica.gr shows
         Email:          "it@example.org",
         Domains:        []string{"files.lab.example.org"},
         CacheDir:       "/var/lib/fileshare/acme",
