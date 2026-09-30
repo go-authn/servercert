@@ -101,9 +101,12 @@ cache directory; a relative path; half an EAB; a domain that is an IP address,
 a wildcard, a single label, ends with a dot, or is not a valid host name; a
 directory URL that is not https ([RFC 8555 §6.1](https://www.rfc-editor.org/rfc/rfc8555#section-6.1)).
 
-`New` also refuses a cache directory accessible by group or others (it holds
-private keys; not checked on Windows, where mode bits do not describe access)
-and creates a missing one `0700`.
+`New` also refuses a cache directory that is a symbolic link, one accessible
+by group or others, one owned by a user other than the process's effective
+user (it holds private keys; mode and owner are not checked on Windows, where
+ACLs decide both -- restrict the directory's ACL to the service account
+yourself), and one it cannot write (a file is created and removed there); it
+creates a missing one `0700`.
 
 ## A defect worked around
 

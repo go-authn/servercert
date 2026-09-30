@@ -5,6 +5,7 @@ package servercert
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -33,7 +34,9 @@ type orderLocations struct {
 	byFinalize map[string]string // finalize URL -> order URL
 }
 
-// maxOrderBody bounds what is read of an order object.
+// maxOrderBody bounds what is read of a JSON response. An ACME object is a
+// few hundred bytes; a longer body is refused rather than cut, since a cut
+// one would reach acme as a different, truncated document.
 const maxOrderBody = 1 << 20
 
 func (o *orderLocations) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -42,10 +45,13 @@ func (o *orderLocations) RoundTrip(req *http.Request) (*http.Response, error) {
 		!strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
 		return res, err
 	}
-	body, err := io.ReadAll(io.LimitReader(res.Body, maxOrderBody))
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxOrderBody+1))
 	res.Body.Close()
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxOrderBody {
+		return nil, fmt.Errorf("servercert: the JSON response to %s %s is longer than %d bytes; refused rather than truncated", req.Method, req.URL, maxOrderBody)
 	}
 	res.Body = io.NopCloser(bytes.NewReader(body))
 	var order struct{ Finalize string }

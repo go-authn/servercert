@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/crypto/acme"
@@ -69,20 +71,40 @@ func readEABKey(path string) ([]byte, error) {
 }
 
 // cacheDir creates dir 0700, or checks that the existing one is a directory
-// nobody but its owner can reach: it holds private keys.
+// only this process's user can reach: it holds private keys. The directory
+// itself must not be a symbolic link (the check would otherwise be of
+// wherever it leads, which someone else may re-point), and on Unix it must
+// belong to the effective user: a 0700 directory another user owns is
+// readable, and writable, by that user. Last, a file is created and removed
+// in it, so that a cache this process cannot write is refused now rather
+// than at the first certificate it fails to store.
 func cacheDir(dir string) error {
-	fi, err := os.Stat(dir)
-	if errors.Is(err, os.ErrNotExist) {
+	dir = filepath.Clean(dir)
+	fi, err := os.Lstat(dir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("servercert: cache directory: %w", err)
 		}
-		return nil
-	}
-	if err != nil {
+	case err != nil:
 		return fmt.Errorf("servercert: cache directory: %w", err)
-	}
-	if !fi.IsDir() {
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return fmt.Errorf("servercert: cache directory %s is a symbolic link; name the directory itself", dir)
+	case !fi.IsDir():
 		return fmt.Errorf("servercert: cache directory %s is not a directory", dir)
+	default:
+		if err := checkPrivate(dir, fi, os.Geteuid()); err != nil {
+			return err
+		}
 	}
-	return checkPrivate(dir, fi.Mode())
+	return probeWritable(dir)
+}
+
+// probeWritable creates a file in dir and removes it.
+func probeWritable(dir string) error {
+	f, err := os.CreateTemp(dir, ".servercert-probe-*")
+	if err != nil {
+		return fmt.Errorf("servercert: cache directory %s is not writable: %w", dir, err)
+	}
+	return errors.Join(f.Close(), os.Remove(f.Name()))
 }
