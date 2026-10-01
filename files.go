@@ -24,6 +24,13 @@ type fileSource struct {
 	now               func() time.Time
 	report            func(error)
 
+	// reloading is held by the one caller reading the files. A read slower
+	// than the recheck period (a stalled network file system) must not let
+	// a second reader start: the two could finish in either order, and the
+	// slower one would put back the older certificate the faster one had
+	// replaced.
+	reloading sync.Mutex
+
 	mu        sync.Mutex
 	cur       *tls.Certificate
 	curPEM    [2][]byte // what cur was parsed from
@@ -74,7 +81,8 @@ func samePair(a, b [2][]byte) bool {
 
 // get returns the certificate to serve. At most one caller per recheck
 // period reads and parses the files, and it does so WITHOUT the lock: every
-// other handshake meanwhile gets the current certificate at once.
+// other handshake meanwhile gets the current certificate at once. Never two
+// at a time: a recheck due while a read is still going on is skipped.
 func (f *fileSource) get() *tls.Certificate {
 	f.mu.Lock()
 	cur := f.cur
@@ -84,7 +92,14 @@ func (f *fileSource) get() *tls.Certificate {
 		return cur
 	}
 	f.lastCheck = now
-	curPEM, badPEM := f.curPEM, f.badPEM
+	f.mu.Unlock()
+
+	if !f.reloading.TryLock() {
+		return cur
+	}
+	defer f.reloading.Unlock()
+	f.mu.Lock()
+	cur, curPEM, badPEM := f.cur, f.curPEM, f.badPEM
 	f.mu.Unlock()
 
 	pem, err := f.read()
