@@ -17,3 +17,12 @@ func checkPrivate(dir string, fi fs.FileInfo, _ int) error {
 	}
 	return nil
 }
+
+// checkAncestor refuses a symbolic link above the cache: whoever owns it can
+// re-point it. Ownership and mode are not checked on this platform.
+func checkAncestor(path string, fi fs.FileInfo, _ int) error {
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symbolic link, which can be re-pointed; name the real path", path)
+	}
+	return nil
+}

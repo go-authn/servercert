@@ -106,7 +106,15 @@ by group or others, one owned by a user other than the process's effective
 user (it holds private keys; mode and owner are not checked on Windows, where
 ACLs decide both -- restrict the directory's ACL to the service account
 yourself), and one it cannot write (a file is created and removed there); it
-creates a missing one `0700`.
+creates a missing one `0700`, and checks what is there **after** creating it.
+Every directory above the cache must be one only root or the effective user
+can change, as sshd's StrictModes requires of the path to `authorized_keys`:
+owned by one of them, and not writable by group or others unless sticky
+(`/tmp`). A symbolic link above the cache is refused unless root owns it
+(macOS's `/var` and `/tmp`): whoever owns a link can re-point it, and the
+private keys with it. On Windows, a symbolic link anywhere in the path is
+refused. A security audit found that only the last component was checked
+(`TestCacheDirParentSymlinkIsRefused`).
 
 ## A defect worked around
 
