@@ -75,26 +75,46 @@ func readEABKey(path string) ([]byte, error) {
 // itself must not be a symbolic link (the check would otherwise be of
 // wherever it leads, which someone else may re-point), and on Unix it must
 // belong to the effective user: a 0700 directory another user owns is
-// readable, and writable, by that user. Last, a file is created and removed
-// in it, so that a cache this process cannot write is refused now rather
-// than at the first certificate it fails to store.
+// readable, and writable, by that user. Every directory above it must be
+// one only root or this user can change (checkAncestor): whoever can rename
+// or re-point a parent moves the cache under them. Last, a file is created
+// and removed in it, so that a cache this process cannot write is refused
+// now rather than at the first certificate it fails to store.
+//
+// ⛔ It checked the final component alone, and only before MkdirAll: a
+// symbolic link as a parent passed, and whatever was put there between the
+// look and MkdirAll -- a link, another user's directory -- was used
+// unchecked (found by a security audit). The checks now run on what is
+// there after MkdirAll.
 func cacheDir(dir string) error {
 	dir = filepath.Clean(dir)
-	fi, err := os.Lstat(dir)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
+	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("servercert: cache directory: %w", err)
 		}
+	}
+	fi, err := os.Lstat(dir)
+	switch {
 	case err != nil:
 		return fmt.Errorf("servercert: cache directory: %w", err)
 	case fi.Mode()&fs.ModeSymlink != 0:
 		return fmt.Errorf("servercert: cache directory %s is a symbolic link; name the directory itself", dir)
 	case !fi.IsDir():
 		return fmt.Errorf("servercert: cache directory %s is not a directory", dir)
-	default:
-		if err := checkPrivate(dir, fi, os.Geteuid()); err != nil {
-			return err
+	}
+	if err := checkPrivate(dir, fi, os.Geteuid()); err != nil {
+		return err
+	}
+	for p := filepath.Dir(dir); ; p = filepath.Dir(p) {
+		afi, err := os.Lstat(p)
+		if err == nil {
+			err = checkAncestor(p, afi, os.Geteuid())
+		}
+		if err != nil {
+			return fmt.Errorf("servercert: cache directory %s: %w", dir, err)
+		}
+		if filepath.Dir(p) == p {
+			break
 		}
 	}
 	return probeWritable(dir)
