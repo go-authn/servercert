@@ -3,6 +3,7 @@
 package servercert
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -226,8 +227,9 @@ func (s *Source) report(err error) {
 // one in service and goes to Config.OnError.
 //
 // With ACME, the certificate is obtained at the first handshake whose SNI
-// names one of the domains, and renewed by autocert before it expires. A
-// client that connects by IP address sends no SNI and gets no certificate.
+// names one of the domains -- or earlier, by Prefetch -- and renewed by
+// autocert before it expires. A client that connects by IP address sends no
+// SNI and is served the first domain's certificate.
 // NextProtos then holds "acme-tls/1", the protocol of the tls-alpn-01
 // challenge (RFC 8737): APPEND your own protocols to it, never replace it,
 // or the CA's validation fails. Append them, too: a Go TLS server that
@@ -252,6 +254,16 @@ func (s *Source) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, e
 	if s.files != nil {
 		return s.files.get(), nil
 	}
+	if hello.ServerName == "" && len(s.domains) > 0 {
+		// A client that connects by IP address sends no SNI, and autocert
+		// refuses it outright ("missing server name"). It is served the
+		// first domain's certificate instead: whether that name is good
+		// enough is the client's to decide, and a handshake that never
+		// completes decides nothing.
+		h := *hello
+		h.ServerName = s.domains[0]
+		hello = &h
+	}
 	cert, err := s.mgr.GetCertificate(hello)
 	// A scanner asking for a name we do not serve is its own problem; a
 	// failure for one of OUR names is ours, and nothing else would say so.
@@ -259,6 +271,41 @@ func (s *Source) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, e
 		s.report(fmt.Errorf("servercert: certificate for %s: %w", hello.ServerName, err))
 	}
 	return cert, err
+}
+
+// Prefetch obtains the certificate of every domain now, instead of at the
+// first handshake that names it -- so that the first client does not wait for
+// an issuance, and a server that no client has yet reached by name still has
+// its certificate in hand. Certificates already cached and valid cost nothing.
+//
+// With tls-alpn-01 or http-01 the CA connects back to validate the name, so
+// call it once the TLS listener on 443, or HTTPHandler on 80, is serving. A
+// CA account whose domains are pre-validated (HARICA Enterprise Admin, for
+// GÉANT TCS) asks for no challenge, and Prefetch may run at once.
+//
+// A failure is returned, joined, and also told to Config.OnError. It is a
+// no-op with files.
+func (s *Source) Prefetch(ctx context.Context) error {
+	if s.mgr == nil || s.closed.Load() {
+		return nil
+	}
+	var failed []error
+	for _, d := range s.domains {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(failed, err)...)
+		}
+		// An ECDSA certificate, which every client this serves supports;
+		// an RSA-only client still gets one of its own on demand.
+		hello := &tls.ClientHelloInfo{ServerName: d,
+			SignatureSchemes: []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256},
+			SupportedCurves:  []tls.CurveID{tls.CurveP256}}
+		if _, err := s.mgr.GetCertificate(hello); err != nil {
+			err = fmt.Errorf("servercert: certificate for %s: %w", d, err)
+			s.report(err)
+			failed = append(failed, err)
+		}
+	}
+	return errors.Join(failed...)
 }
 
 // HTTPHandler answers the http-01 challenge under /.well-known/acme-challenge/

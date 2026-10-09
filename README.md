@@ -43,9 +43,14 @@ autocert answers two challenge types, and no other:
 No `dns-01`, hence **no wildcard** and no IP-address certificate: `Check`
 refuses both rather than letting them fail at the first handshake.
 
-Certificates are obtained **on demand**, at the first TLS handshake whose SNI
-names one of `Domains`, and renewed before they expire. **A client that
-connects by IP address sends no SNI and gets no certificate.**
+Certificates are obtained at the first TLS handshake whose SNI names one of
+`Domains` — or **before any client, by `Source.Prefetch`** (since v0.5.0), which
+a server calls once its listeners are up, so the first client does not wait
+for an issuance. They are renewed before they expire: autocert renews at the
+lesser of 30 days and a third of the lifetime before expiry, which suits the
+shorter certificates CAs are moving to (Let's Encrypt's 45-day and 6-day
+profiles). **A client that connects by IP address sends no SNI** and is served
+the first domain's certificate (before v0.5.0 its handshake failed).
 
 `TLSConfig().NextProtos` holds `acme-tls/1`. **Append** your protocols, never
 replace the slice: without it the CA's tls-alpn-01 validation fails. Append
@@ -59,10 +64,18 @@ client whose offer shares none, so an NFS-over-TLS server adds `sunrpc`
 autocert returns at once when a new order is already `ready` — every
 authorization valid before any challenge. That is what a CA with
 **pre-validated domains** answers, and it is the case of **GÉANT TCS**, served
-by **HARICA** since 2025-01-10 (it replaced Sectigo): an Enterprise account
-with pre-validated domains gets certificates with **no ACME challenge at all**
+by **HARICA** since 2025-01-10 (it replaced Sectigo): an **Enterprise Admin**
+ACME account gets **OV** certificates for the organisation's validated domains
+with **no ACME challenge at all**
 ([DFN documentation](https://doku.tid.dfn.de/de:dfnpki:tcs:2025:acme):
-*„Keine ACME Challenge"*).
+*„Keine ACME Challenge"*; [RENATER](https://services.renater.fr/tcs/acme)).
+An **Enterprise User** account is not that: its **DV** certificates always go
+through an http or dns challenge, so it needs a port the CA can reach.
+
+Two conditions, both from RENATER's documentation: the domain's **CAA** record,
+if it has one, must allow `harica.gr` (`IN CAA 0 issue "harica.gr"`), or the
+request stays *Pending*; and the server must reach `acme-v02.harica.gr` and
+`ocsp-tls.harica.gr` outbound.
 
 So a server that the Internet reaches on **neither port 80 nor 443** — a file
 server inside a lab network — still gets a publicly trusted certificate:
