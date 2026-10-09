@@ -3,6 +3,7 @@
 package servercert
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,4 +194,16 @@ func TestFilesConcurrent(t *testing.T) {
 		}
 	}
 	wg.Wait()
+}
+
+// Prefetch has nothing to do for files.
+func TestPrefetchWithFiles(t *testing.T) {
+	cf, kf := newTestCA(t).pair(t, t.TempDir(), "files.example", 1)
+	s, err := New(Config{CertFile: cf, KeyFile: kf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Prefetch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }

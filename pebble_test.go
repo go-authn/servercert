@@ -10,6 +10,8 @@ package servercert
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
@@ -169,10 +171,6 @@ func TestPebbleTLSALPN01(t *testing.T) {
 		t.Fatalf("OnError told %v", e)
 	}
 
-	// A client by IP sends no SNI and gets nothing, as documented.
-	if _, err := dial(addr, "", p.roots); err == nil {
-		t.Error("a client without SNI got a certificate")
-	}
 	// A name we do not serve fails without troubling OnError.
 	if _, err := dial(addr, "other.servercert.test", p.roots); err == nil {
 		t.Error("a name outside Domains got a certificate")
@@ -336,5 +334,90 @@ func TestPebbleNeedsOrderLocations(t *testing.T) {
 	}
 	if e := got.get(); len(e) == 0 || !strings.Contains(e[0].Error(), `unsupported protocol scheme ""`) {
 		t.Fatalf("OnError got %v, want the empty order URL failure", e)
+	}
+}
+
+// dialNoSNI completes a handshake that names no server -- a client connecting
+// by IP address -- and returns the certificate it was shown, unjudged. (A Go
+// client given an empty ServerName and no InsecureSkipVerify refuses to dial
+// at all, so an assertion through dial(addr, "", ...) could never fail.)
+func dialNoSNI(t *testing.T, addr string) []*x509.Certificate {
+	t.Helper()
+	c, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true})
+	if err != nil {
+		t.Fatalf("a handshake without SNI failed: %v", err)
+	}
+	defer c.Close()
+	return c.ConnectionState().PeerCertificates
+}
+
+// A client by IP sends no SNI, and is served the first domain's certificate,
+// one pebble's root vouches for.
+func TestPebbleNoSNIIsServedTheFirstDomain(t *testing.T) {
+	ln, port := freePort(t)
+	p := startPebble(t, port, closedPort(t), nil, "0")
+	s, got := acmeSource(t, p, filepath.Join(t.TempDir(), "cache"), nil)
+	chain := dialNoSNI(t, serveOn(t, ln, s.TLSConfig()))
+	inter := x509.NewCertPool()
+	for _, c := range chain[1:] {
+		inter.AddCert(c)
+	}
+	if _, err := chain[0].Verify(x509.VerifyOptions{DNSName: domain, Roots: p.roots, Intermediates: inter}); err != nil {
+		t.Fatalf("the certificate served without SNI: %v", err)
+	}
+	if e := got.get(); len(e) != 0 {
+		t.Fatalf("OnError told %v", e)
+	}
+}
+
+// Prefetch issues before any client: the certificate is in the cache once it
+// returns, and the first client is served it.
+func TestPebblePrefetch(t *testing.T) {
+	ln, port := freePort(t)
+	p := startPebble(t, port, closedPort(t), nil, "0")
+	cache := filepath.Join(t.TempDir(), "cache")
+	s, got := acmeSource(t, p, cache, nil)
+	addr := serveOn(t, ln, s.TLSConfig()) // the CA validates tls-alpn-01 here
+	if err := s.Prefetch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(cache)
+	found := false
+	for _, e := range entries {
+		found = found || strings.HasPrefix(e.Name(), domain)
+	}
+	if !found {
+		t.Fatalf("no certificate for %s in the cache after Prefetch: %v", domain, entries)
+	}
+	issued(t, addr, p)
+	if e := got.get(); len(e) != 0 {
+		t.Fatalf("OnError told %v", e)
+	}
+	// Twice is free, a closed source and a cancelled context do nothing.
+	if err := s.Prefetch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.Prefetch(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled Prefetch: %v", err)
+	}
+	s.Close()
+	if err := s.Prefetch(context.Background()); err != nil {
+		t.Fatalf("a closed source: %v", err)
+	}
+}
+
+// With no challenge the CA can reach, Prefetch fails, says which name, and
+// tells OnError too.
+func TestPebblePrefetchFails(t *testing.T) {
+	p := startPebble(t, closedPort(t), closedPort(t), nil, "0")
+	s, got := acmeSource(t, p, filepath.Join(t.TempDir(), "cache"), nil)
+	err := s.Prefetch(context.Background())
+	if err == nil || !strings.Contains(err.Error(), domain) {
+		t.Fatalf("Prefetch = %v, want the failure for %s", err, domain)
+	}
+	if e := got.get(); len(e) == 0 {
+		t.Fatal("OnError was not told")
 	}
 }
