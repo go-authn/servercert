@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -58,11 +59,29 @@ func (f *fileSource) read() ([2][]byte, error) {
 	if err != nil {
 		return [2][]byte{}, fmt.Errorf("servercert: %w", err)
 	}
-	k, err := os.ReadFile(f.keyFile)
+	k, err := readSecretFile(f.keyFile)
 	if err != nil {
 		return [2][]byte{}, fmt.Errorf("servercert: %w", err)
 	}
 	return [2][]byte{c, k}, nil
+}
+
+// readSecretFile reads a file that holds a secret, after checking the mode of
+// the file it opened (not of its name: no window between check and read).
+func readSecretFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	// A Stat that fails on an open file has nothing to say about its mode; the
+	// read below then reports whatever is wrong.
+	if fi, err := f.Stat(); err == nil && fi.Mode().IsRegular() {
+		if err := checkPrivateFile(path, fi); err != nil {
+			return nil, err
+		}
+	}
+	return io.ReadAll(f)
 }
 
 // parse loads the pair; tls.X509KeyPair also refuses a key that does not

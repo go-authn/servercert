@@ -24,6 +24,16 @@ func checkPrivate(dir string, fi fs.FileInfo, euid int) error {
 	return nil
 }
 
+// checkPrivateFile refuses a secret file (the TLS private key, the EAB HMAC
+// key) that group or others can read or write, as OpenSSH does for a private
+// key: the same rule as the cache directory.
+func checkPrivateFile(path string, fi fs.FileInfo) error {
+	if fi.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("servercert: %s is accessible by group or others (%v); it holds a secret: chmod 600 it", path, fi.Mode().Perm())
+	}
+	return nil
+}
+
 // checkAncestor refuses a directory above the cache that someone other than
 // root or euid could change, as sshd's StrictModes does for the path to
 // authorized_keys: one that belongs to another user, or that its group or
