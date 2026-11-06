@@ -74,11 +74,9 @@ func readSecretFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if fi.Mode().IsRegular() {
+	// A Stat that fails on an open file has nothing to say about its mode; the
+	// read below then reports whatever is wrong.
+	if fi, err := f.Stat(); err == nil && fi.Mode().IsRegular() {
 		if err := checkPrivateFile(path, fi); err != nil {
 			return nil, err
 		}
