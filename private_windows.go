@@ -15,6 +15,10 @@ import (
 // directory this process cannot write.
 func checkPrivate(string, fs.FileInfo, int) error { return nil }
 
+// checkPrivateFile accepts any file on Windows, for the reason checkPrivate
+// does: the mode shows nothing, ACLs decide.
+func checkPrivateFile(string, fs.FileInfo) error { return nil }
+
 // checkAncestor refuses a symbolic link above the cache: whoever owns it can
 // re-point it. Who may change a directory is an ACL matter on Windows, which
 // fs.FileInfo does not show.

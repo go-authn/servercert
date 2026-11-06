@@ -51,7 +51,7 @@ func newManager(a *ACME) (*autocert.Manager, error) {
 // portal or tool may have been re-encoded; the two alphabets cannot be
 // confused (a key using both is refused by both decoders).
 func readEABKey(path string) ([]byte, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readSecretFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("servercert: EAB HMAC key: %w", err)
 	}

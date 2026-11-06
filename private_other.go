@@ -18,6 +18,14 @@ func checkPrivate(dir string, fi fs.FileInfo, _ int) error {
 	return nil
 }
 
+// checkPrivateFile refuses a secret file group or others can read or write.
+func checkPrivateFile(path string, fi fs.FileInfo) error {
+	if fi.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("servercert: %s is accessible by group or others (%v); it holds a secret: chmod 600 it", path, fi.Mode().Perm())
+	}
+	return nil
+}
+
 // checkAncestor refuses a symbolic link above the cache: whoever owns it can
 // re-point it. Ownership and mode are not checked on this platform.
 func checkAncestor(path string, fi fs.FileInfo, _ int) error {

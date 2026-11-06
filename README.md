@@ -129,6 +129,13 @@ private keys with it. On Windows, a symbolic link anywhere in the path is
 refused. A security audit found that only the last component was checked
 (`TestCacheDirParentSymlinkIsRefused`).
 
+`New` (and every reload) also refuses a **secret file** that group or others can
+read or write: the TLS `KeyFile` and the `EABHMACKeyFile`, as OpenSSH refuses a
+private key, with `chmod 600 it`. The mode is read from the opened file, not
+its name. A replacement key written readable is not taken: the current
+certificate keeps serving and `OnError` is called. Not checked on Windows (ACLs).
+**Upgrade:** `chmod 600` (or `0400`) both files before deploying.
+
 ## A defect worked around
 
 x/crypto/acme v0.57.0 ([golang/go#77704](https://github.com/golang/go/issues/77704)):
