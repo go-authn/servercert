@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -140,7 +141,7 @@ func TestPebbleDNS01(t *testing.T) {
 	if z.peak["_acme-challenge."+domain+"."] != 1 {
 		t.Errorf("events %v", z.events)
 	}
-	if fi, err := os.Stat(filepath.Join(cache, certFile)); err != nil || fi.Mode().Perm()&0o077 != 0 {
+	if fi, err := os.Stat(filepath.Join(cache, certFile)); err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0) {
 		t.Errorf("cached certificate: %v, %v", fi, err)
 	}
 
@@ -333,10 +334,12 @@ func TestDNSCredentialsFile(t *testing.T) {
 		t.Fatalf("0600 file: %v, provider saw %q", err, seen)
 	}
 	seen = ""
-	if _, err := New(cfg(write("open", 0o644))); err == nil || seen != "" {
-		t.Errorf("a group/other-readable credentials file: %v, provider saw %q", err, seen)
-	} else if strings.Contains(err.Error(), "tsig-secret-bytes") {
-		t.Errorf("the error quotes the secret: %v", err)
+	if runtime.GOOS != "windows" { // mode bits do not describe access there
+		if _, err := New(cfg(write("open", 0o644))); err == nil || seen != "" {
+			t.Errorf("a group/other-readable credentials file: %v, provider saw %q", err, seen)
+		} else if strings.Contains(err.Error(), "tsig-secret-bytes") {
+			t.Errorf("the error quotes the secret: %v", err)
+		}
 	}
 	if _, err := New(cfg(filepath.Join(dir, "missing"))); err == nil {
 		t.Error("a missing credentials file was accepted")
