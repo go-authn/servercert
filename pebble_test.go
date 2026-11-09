@@ -81,6 +81,13 @@ type pebble struct {
 // with those key IDs and base64url HMAC keys.
 func startPebble(t *testing.T, tlsPort, httpPort int, eab map[string]string, authzReuse string) *pebble {
 	t.Helper()
+	return startPebbleDNS(t, tlsPort, httpPort, eab, authzReuse, resolver(t))
+}
+
+// startPebbleDNS is startPebble with the DNS server its VA asks given: dns-01
+// looks the TXT record up there.
+func startPebbleDNS(t *testing.T, tlsPort, httpPort int, eab map[string]string, authzReuse, dnsAddr string) *pebble {
+	t.Helper()
 	t.Setenv("PEBBLE_VA_NOSLEEP", "1")        // no random 0-5 s sleep before validating
 	t.Setenv("PEBBLE_WFE_NONCEREJECT", "0")   // no deliberately rejected nonces
 	t.Setenv("PEBBLE_AUTHZREUSE", authzReuse) // 0: every order is validated
@@ -95,7 +102,7 @@ func startPebble(t *testing.T, tlsPort, httpPort int, eab map[string]string, aut
 	store := db.NewMemoryStore()
 	profiles := map[string]ca.Profile{"default": {Description: "default"}}
 	authority := ca.New(logger, store, "", "ecdsa", 0, 1, profiles)
-	validator := va.New(logger, httpPort, tlsPort, false, resolver(t), store)
+	validator := va.New(logger, httpPort, tlsPort, false, dnsAddr, store)
 	for kid, key := range eab {
 		if err := store.AddExternalAccountKeyByID(kid, key); err != nil {
 			t.Fatal(err)

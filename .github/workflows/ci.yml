@@ -56,6 +56,35 @@ jobs:
         with: { go-version-file: go.mod, check-latest: true, cache: true }
       - run: go test -race -count=1 ./...
 
+  # rfc2136 is a module of its own (so that this one carries no DNS library):
+  # `./...` of the root does not reach it.
+  rfc2136:
+    name: rfc2136 module (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: rfc2136
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: rfc2136/go.mod
+          check-latest: true
+          cache: true
+          cache-dependency-path: rfc2136/go.sum
+      - run: go vet ./...
+      - run: go test -count=1 ./...
+      - name: fuzz the credentials parser
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -fuzz FuzzParseCredentials -fuzztime 30s .
+      - name: govulncheck
+        if: matrix.os == 'ubuntu-latest'
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   coverage:
     name: coverage (the standard is 100%)
     runs-on: ubuntu-latest

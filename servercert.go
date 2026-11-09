@@ -53,9 +53,8 @@ type ACME struct {
 	Email string
 
 	// Domains are the names a certificate may be requested for: the host
-	// whitelist. Required. No IP address and no wildcard: autocert can do
-	// neither (it validates with tls-alpn-01 or http-01, and a wildcard needs
-	// dns-01).
+	// whitelist. Required. No IP address. A wildcard ("*.example.org") only
+	// with DNS: it needs dns-01, which autocert does not do.
 	Domains []string
 
 	// CacheDir holds the account key and the certificates, which are
@@ -71,6 +70,15 @@ type ACME struct {
 	// secret, which is why it is a file and never a value in the config.
 	EABKeyID       string
 	EABHMACKeyFile string
+
+	// DNS, when set, proves control of the names with dns-01 (RFC 8555 §8.4)
+	// instead of tls-alpn-01 and http-01: a TXT record, published through a
+	// [DNSSolver]. The server then needs no inbound port and may sit on a
+	// private address, and Domains may hold a wildcard ("*.school.example",
+	// which does not cover school.example itself: list both). Issuance goes
+	// through golang.org/x/crypto/acme directly, one certificate for all the
+	// names, kept in CacheDir. Not together with HTTPChallenge.
+	DNS *DNS
 
 	// HTTPChallenge also answers http-01 (RFC 8555 §8.3) when tls-alpn-01
 	// fails. The caller must then serve [Source.HTTPHandler] on port 80.
@@ -108,8 +116,16 @@ func (a *ACME) check() error {
 	if len(a.Domains) == 0 {
 		return errors.New("servercert: ACME needs at least one domain")
 	}
+	if a.DNS != nil {
+		if a.HTTPChallenge {
+			return errors.New("servercert: ACME.DNS and HTTPChallenge are exclusive: with DNS every name is proved by dns-01")
+		}
+		if err := a.DNS.check(); err != nil {
+			return err
+		}
+	}
 	for _, d := range a.Domains {
-		if err := checkDomain(d); err != nil {
+		if err := checkDomain(d, a.DNS != nil); err != nil {
 			return err
 		}
 	}
@@ -139,14 +155,25 @@ func (a *ACME) check() error {
 	return nil
 }
 
-func checkDomain(d string) error {
+func checkDomain(d string, dns01 bool) error {
+	if base, ok := wildcardBase(d); ok && dns01 {
+		// A wildcard is "*." and a name, nothing else (RFC 8555 §7.1.3,
+		// RFC 6125 §6.4.3): "a.*.b", "*a.b", "*.*.b" and "*" are not names.
+		if strings.Contains(base, "*") {
+			return fmt.Errorf("servercert: ACME domain %q: a wildcard is one leading \"*.\" and nothing else", d)
+		}
+		d = base
+		if !strings.Contains(d, ".") {
+			return fmt.Errorf("servercert: ACME domain %q: a wildcard over a single label", "*."+d)
+		}
+	}
 	switch {
 	case d == "":
 		return errors.New("servercert: ACME.Domains holds an empty name")
 	case net.ParseIP(d) != nil:
-		return fmt.Errorf("servercert: ACME domain %q is an IP address; autocert issues only for DNS names", d)
+		return fmt.Errorf("servercert: ACME domain %q is an IP address; ACME issues only for DNS names here", d)
 	case strings.Contains(d, "*"):
-		return fmt.Errorf("servercert: ACME domain %q is a wildcard; that needs dns-01, which autocert does not do", d)
+		return fmt.Errorf("servercert: ACME domain %q is a wildcard; that needs dns-01: set ACME.DNS", d)
 	case strings.HasSuffix(d, "."):
 		return fmt.Errorf("servercert: ACME domain %q ends with a dot", d)
 	case !strings.Contains(d, "."):
@@ -173,7 +200,8 @@ func absolute(field, path string) error {
 type Source struct {
 	files   *fileSource
 	mgr     *autocert.Manager
-	domains []string // ASCII, lower case: what OnError is told about
+	dns     *dnsIssuer // dns-01, instead of mgr
+	domains []string   // ASCII, lower case: what OnError is told about
 	http01  bool
 	onError func(error)
 	closed  atomic.Bool
@@ -200,16 +228,32 @@ func New(c Config) (*Source, error) {
 		s.files = f
 		return s, nil
 	}
+	for _, d := range c.ACME.Domains {
+		base, wild := wildcardBase(d)
+		if !wild {
+			base = d
+		}
+		a, _ := idna.Lookup.ToASCII(base) // Check refused the names it cannot convert
+		a = strings.ToLower(a)
+		if wild {
+			a = "*." + a
+		}
+		s.domains = append(s.domains, a)
+	}
+	if c.ACME.DNS != nil {
+		is, err := newDNSIssuer(c.ACME, s.domains, s.report)
+		if err != nil {
+			return nil, err
+		}
+		s.dns = is
+		return s, nil
+	}
 	m, err := newManager(c.ACME)
 	if err != nil {
 		return nil, err
 	}
 	s.mgr = m
 	s.http01 = c.ACME.HTTPChallenge
-	for _, d := range c.ACME.Domains {
-		a, _ := idna.Lookup.ToASCII(d) // Check refused the names it cannot convert
-		s.domains = append(s.domains, strings.ToLower(a))
-	}
 	return s, nil
 }
 
@@ -254,6 +298,15 @@ func (s *Source) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, e
 	if s.files != nil {
 		return s.files.get(), nil
 	}
+	if s.dns != nil {
+		// A client that connects by IP address sends no SNI and gets the one
+		// certificate, as with autocert below.
+		cert, err := s.dns.get(hello)
+		if err != nil && (hello.ServerName == "" || s.dns.serves(hello.ServerName)) {
+			s.report(fmt.Errorf("servercert: certificate for %s: %w", hello.ServerName, err))
+		}
+		return cert, err
+	}
 	if hello.ServerName == "" && len(s.domains) > 0 {
 		// A client that connects by IP address sends no SNI, and autocert
 		// refuses it outright ("missing server name"). It is served the
@@ -286,6 +339,14 @@ func (s *Source) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, e
 // A failure is returned, joined, and also told to Config.OnError. It is a
 // no-op with files.
 func (s *Source) Prefetch(ctx context.Context) error {
+	if s.dns != nil && !s.closed.Load() {
+		if err := s.dns.ensure(ctx); err != nil {
+			err = fmt.Errorf("servercert: certificate: %w", err)
+			s.report(err)
+			return err
+		}
+		return nil
+	}
 	if s.mgr == nil || s.closed.Load() {
 		return nil
 	}
