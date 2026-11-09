@@ -36,10 +36,15 @@
 //     negotiates the "acme-tls/1" ALPN protocol. [Source.TLSConfig] carries
 //     that protocol; the caller must APPEND its own to NextProtos, never
 //     replace them.
+//
 //   - http-01 (RFC 8555 §8.3): the CA fetches a token on port 80. With
 //     ACME.HTTPChallenge, [Source.HTTPHandler] serves it and must be on :80.
 //
-// There is no dns-01, hence no wildcard, and no IP address certificates;
+//   - dns-01 (RFC 8555 §8.4), with ACME.DNS: a TXT record published through a
+//     [DNSSolver]; no inbound port, so a server on a private address works,
+//     and a wildcard is allowed. Issuance bypasses autocert (see [DNS]).
+//
+// Without ACME.DNS there is no wildcard; an IP address is never issued for.
 // [Config.Check] refuses both.
 //
 // A CA may need no challenge at all. autocert's order flow returns as soon

@@ -40,8 +40,66 @@ autocert answers two challenge types, and no other:
 | `tls-alpn-01` | [RFC 8737](https://www.rfc-editor.org/rfc/rfc8737) | port **443**, ALPN `acme-tls/1` |
 | `http-01` | [RFC 8555 §8.3](https://www.rfc-editor.org/rfc/rfc8555#section-8.3) | port **80**; set `HTTPChallenge` and serve `HTTPHandler` there |
 
-No `dns-01`, hence **no wildcard** and no IP-address certificate: `Check`
-refuses both rather than letting them fail at the first handshake.
+Without `ACME.DNS` there is no `dns-01`, hence **no wildcard**; an
+IP-address certificate is never issued. `Check` refuses both rather than letting
+them fail at the first handshake.
+
+### dns-01: a server the CA cannot reach (since v0.7.0)
+
+`ACME.DNS` proves control of the names with a TXT record at
+`_acme-challenge.<name>` ([RFC 8555 §8.4](https://www.rfc-editor.org/rfc/rfc8555#section-8.4)):
+the server needs **no inbound port** and may sit on a private LAN address
+(`class.example-school.fr` resolving to `192.168.1.10`), and `Domains` may hold a
+wildcard (`*.example-school.fr`, which does not cover the base name: list both).
+Issuance goes through `x/crypto/acme` directly (autocert has no dns-01): one
+order, one certificate for every name, an authorization proved per name, a
+propagation wait, finalize; the certificate and key are kept 0600 in `CacheDir`
+and renewed in the background at the lesser of 30 days and a third of the
+lifetime before expiry, the old one serving meanwhile. A failed order is not
+retried for a minute (a CA's failed-validation limit is hit by a loop).
+
+```go
+servercert.ACME{
+    Domains:  []string{"*.example-school.fr", "example-school.fr"},
+    CacheDir: "/var/lib/relay/certs",
+    DNS: &servercert.DNS{
+        CredentialsFile: "/etc/relay/dns-update.conf", // 0600, owned by the user
+        Provider: func(b []byte) (servercert.DNSSolver, error) { return rfc2136.New(b) },
+        Resolver: "192.0.2.53:53", // optional: wait until the TXT is visible there
+    },
+}
+```
+
+The provider is a two-method interface, so providers stay out of this module:
+
+```go
+type DNSSolver interface {
+    Present(ctx context.Context, name, value string) error // add one TXT value at name
+    CleanUp(ctx context.Context, name, value string) error // remove that value only
+}
+```
+
+A wildcard and its base name share one record name with two values, so both
+methods work on one value, never the whole RRset. The records are removed
+whatever the outcome. **Credentials** are read from `CredentialsFile` under the
+checks of `EABHMACKeyFile` (absolute, 0600, owned by the effective user) and
+handed to `Provider`; never an argument, an environment variable or a URL.
+`DNS` excludes `HTTPChallenge`. `Check` keeps refusing IP addresses, and a
+wildcard is refused unless `DNS` is set.
+
+The module [`rfc2136`](rfc2136/) (`github.com/go-authn/servercert/rfc2136`,
+a separate module, so this one carries no DNS library) is the provider for a
+name server that takes RFC 2136 dynamic updates signed with TSIG (RFC 8945):
+`hmac-sha256/384/512`, and an unsigned or wrongly signed answer is an error.
+Its credentials file:
+
+```
+server    = 192.0.2.53:53
+zone      = example-school.fr
+key       = acme-update
+algorithm = hmac-sha256   # optional
+secret    = <base64 TSIG secret>
+```
 
 Certificates are obtained at the first TLS handshake whose SNI names one of
 `Domains` — or **before any client, by `Source.Prefetch`** (since v0.5.0), which
@@ -158,3 +216,14 @@ stub sending the test name to 127.0.0.1. Certificates are verified by
 absent, wrong, unknown, then right in the same test; a pre-validated domain
 issued with no challenge port open (and its control: no prior authorization,
 no certificate).
+
+dns-01 runs against the same in-process pebble with **no challenge port open**:
+the DNS stub answers the TXT records a test solver published, so pebble's own
+validator does the lookup. Covered: one name; a wildcard with its base name
+(two values at one record name, and a name two labels below the wildcard
+refused); the cache reused with a solver that refuses everything; the records
+removed after success and after failure; the control with a **wrong TXT value**
+(refused, nothing cached, `OnError` told, no second attempt within a minute);
+a `Resolver` that never sees the right value stopping the order before the CA is
+asked. `rfc2136` is tested against a TSIG-verifying UPDATE server (wrong key,
+unsigned answer, zone check, delete of one value) and `FuzzParseCredentials`.
