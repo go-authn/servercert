@@ -1,6 +1,6 @@
 module github.com/go-authn/servercert
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/letsencrypt/pebble/v2 v2.10.1
