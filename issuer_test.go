@@ -299,11 +299,48 @@ func TestPropagateWaits(t *testing.T) {
 }
 
 func TestPresentWithoutDNS01(t *testing.T) {
-	st := &orderState{is: &dnsIssuer{}}
+	st := &orderState{is: &dnsIssuer{domains: []string{"x.example.org"}}}
 	z := &acme.Authorization{Identifier: acme.AuthzID{Type: "dns", Value: "x.example.org"},
 		Challenges: []*acme.Challenge{{Type: "http-01"}}}
 	if err := st.present(context.Background(), z); err == nil || !strings.Contains(err.Error(), "no dns-01") {
 		t.Errorf("err %v", err)
+	}
+}
+
+// A CA (or whoever sits in its path) names the identifier of an authorization;
+// the TXT record name is built from it. RFC 8555 §7.1.4: the authorization is
+// for the identifier the order asked for, so an authorization for any other
+// name must publish nothing, in a zone the solver may be able to write.
+func TestPresentRefusesAnIdentifierThatWasNotOrdered(t *testing.T) {
+	chal := []*acme.Challenge{{Type: "dns-01", Token: "tok"}}
+	for _, tc := range []struct {
+		name    string
+		domains []string
+		id      acme.AuthzID
+		wild    bool
+	}{
+		{"other name", []string{"a.example.org"}, acme.AuthzID{Type: "dns", Value: "victim.example.net"}, false},
+		{"parent of the name", []string{"a.example.org"}, acme.AuthzID{Type: "dns", Value: "example.org"}, false},
+		{"not dns", []string{"a.example.org"}, acme.AuthzID{Type: "ip", Value: "a.example.org"}, false},
+		{"wildcard not ordered", []string{"a.example.org"}, acme.AuthzID{Type: "dns", Value: "a.example.org"}, true},
+		{"exact name ordered, wildcard claimed", []string{"*.example.org"}, acme.AuthzID{Type: "dns", Value: "other.org"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			zone := newTXTZone(t)
+			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := &orderState{is: &dnsIssuer{domains: tc.domains, solver: zone, client: &acme.Client{Key: key}}}
+			z := &acme.Authorization{Identifier: tc.id, Wildcard: tc.wild, Challenges: chal}
+			err = st.present(context.Background(), z)
+			if err == nil || !strings.Contains(err.Error(), "not ordered") {
+				t.Errorf("err %v", err)
+			}
+			if len(zone.events) != 0 || len(st.published) != 0 {
+				t.Errorf("published for an identifier never ordered: %v", zone.events)
+			}
+		})
 	}
 }
 
