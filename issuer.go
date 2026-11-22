@@ -375,9 +375,29 @@ type orderState struct {
 	authzURIs []string
 }
 
+// ordered says the authorization is for a name this order asked for (RFC 8555
+// §7.1.4): a dns identifier, the ordered name itself, or, for a wildcard, the
+// base of an ordered "*.<base>" with wildcard true. The record name comes from
+// the identifier, so a name the CA invented must never reach the solver.
+func (st *orderState) ordered(z *acme.Authorization) bool {
+	if z.Identifier.Type != "dns" {
+		return false
+	}
+	v := strings.ToLower(strings.TrimSuffix(z.Identifier.Value, "."))
+	for _, d := range st.is.domains {
+		if base, ok := wildcardBase(d); ok == z.Wildcard && (!ok && d == v || ok && base == v) {
+			return true
+		}
+	}
+	return false
+}
+
 // present publishes the TXT record of the dns-01 challenge of a pending
 // authorization.
 func (st *orderState) present(ctx context.Context, z *acme.Authorization) error {
+	if !st.ordered(z) {
+		return fmt.Errorf("the CA's authorization is for %s %q (wildcard %t), which was not ordered", z.Identifier.Type, z.Identifier.Value, z.Wildcard)
+	}
 	var chal *acme.Challenge
 	for _, c := range z.Challenges {
 		if c.Type == "dns-01" {
